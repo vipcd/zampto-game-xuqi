@@ -1,4 +1,4 @@
-name: Zampto Auto Renew with Proxy
+name: Zampto Auto Renew with Universal Proxy Node
 
 on:
   schedule:
@@ -13,7 +13,6 @@ jobs:
       - name: Checkout Public Repo
         uses: actions/checkout@v4
 
-      # 🌟【彻底恢复】不用任何稀疏拉取和 curl，用回你之前完全正常的标准整库拉取
       - name: Checkout Private Core Repo
         uses: actions/checkout@v4
         with:
@@ -21,71 +20,275 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      - name: Install Hysteria2 Client Core
-        env:
-          TERM: xterm
+      - name: Install Mihomo Core
         run: |
-          curl -fsSL https://get.hy2.sh/ -o install_hy2.sh
-          sudo bash install_hy2.sh
-          rm install_hy2.sh
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y jq gzip
 
-      - name: Parse Hysteria2 URI & Generate Config
-        env:
-          HYSTERIA2_NODE: ${{ secrets.HYSTERIA2_NODE }}
-        run: |
-          python3 -c "
-          import os, json, re
-          uri = os.environ.get('HYSTERIA2_NODE', '').strip()
-          if not uri:
-              print('❌ 未检测到配置的 HYSTERIA2_NODE')
-              exit(1)
-          
-          clean_uri = uri.split('#')[0]
-          if clean_uri.startswith('hysteria2://'):
-              clean_uri = clean_uri[len('hysteria2://'):]
-          
-          if '@' in clean_uri:
-              auth, rest = clean_uri.split('@', 1)
-          else:
-              auth, rest = '', clean_uri
-              
-          if '?' in rest:
-              server, query_str = rest.split('?', 1)
-          else:
-              server, query_str = rest, ''
-              
-          sni = 'www.bing.com'
-          insecure = True
-          
-          match_sni = re.search(r'sni=([^&]+)', query_str)
-          if match_sni: 
-              sni = match_sni.group(1)
-              
-          config = {
-              'server': server,
-              'auth': auth,
-              'tls': {'sni': sni, 'insecure': insecure},
-              'http': {'listen': '127.0.0.1:10809'},
-              'socks5': {'listen': '127.0.0.1:10808'}
-          }
-          
-          with open('hy2_config.json', 'w') as f:
-              json.dump(config, f, indent=2)
-          "
+          echo "下载 Mihomo 最新 Linux amd64 内核..."
+          ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64.*\\.gz$")) | select(.name | test("compatible") | not) | .browser_download_url' \
+            | head -n 1)
 
-      - name: Start Hysteria2 Tunnel Backend
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "未找到普通 amd64 版本，尝试 compatible 版本..."
+            ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+              | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64-compatible.*\\.gz$")) | .browser_download_url' \
+              | head -n 1)
+          fi
+
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "❌ 未找到可用的 Mihomo Linux amd64 下载地址"
+            exit 1
+          fi
+
+          curl -L "$ASSET_URL" -o mihomo.gz
+          gunzip -f mihomo.gz
+          chmod +x mihomo
+          sudo mv mihomo /usr/local/bin/mihomo
+          mihomo -v
+
+      - name: Convert V2rayN Node To Mihomo Config
+        env:
+          PROXY_NODE: ${{ secrets.PROXY_NODE }}
         run: |
-          hysteria client -c hy2_config.json >/dev/null 2>&1 &
-          sleep 4
+          set -e
+          if [ -z "$PROXY_NODE" ]; then
+            echo "❌ 未检测到 GitHub Secret: PROXY_NODE"
+            echo "请把 v2rayN 里复制出来的单个节点链接放到 PROXY_NODE"
+            exit 1
+          fi
+
+          python3 <<'PY'
+          import os, re, json, base64, html
+          from urllib.parse import urlsplit, parse_qs, unquote
+
+          raw = html.unescape(os.environ.get("PROXY_NODE", "").strip())
+          if not raw:
+              raise SystemExit("PROXY_NODE 为空")
+
+          # 只取第一行，避免误粘贴多个节点或订阅内容
+          raw = raw.splitlines()[0].strip()
+          name = "v2rayn-node"
+          if "#" in raw:
+              try:
+                  name = unquote(raw.rsplit("#", 1)[1]) or name
+              except Exception:
+                  pass
+
+          def b64decode_text(s):
+              s = s.strip()
+              s += "=" * (-len(s) % 4)
+              return base64.urlsafe_b64decode(s.encode()).decode(errors="ignore")
+
+          def q(v):
+              if isinstance(v, bool):
+                  return "true" if v else "false"
+              if isinstance(v, int):
+                  return str(v)
+              if v is None:
+                  return "''"
+              s = str(v)
+              return json.dumps(s, ensure_ascii=False)
+
+          def emit_proxy(p):
+              lines = ["proxies:", "  - name: " + q(p.pop("name", name))]
+              order = ["type", "server", "port", "uuid", "password", "cipher", "alterId", "udp", "tls", "servername", "sni", "skip-cert-verify", "network", "flow", "client-fingerprint"]
+              nested = []
+              for k in order + [x for x in p.keys() if x not in order]:
+                  if k not in p: continue
+                  v = p[k]
+                  if isinstance(v, dict):
+                      nested.append((k, v))
+                  else:
+                      lines.append(f"    {k}: {q(v)}")
+              for k, d in nested:
+                  lines.append(f"    {k}:")
+                  for dk, dv in d.items():
+                      if isinstance(dv, dict):
+                          lines.append(f"      {dk}:")
+                          for xk, xv in dv.items():
+                              lines.append(f"        {xk}: {q(xv)}")
+                      else:
+                          lines.append(f"      {dk}: {q(dv)}")
+              return "\n".join(lines)
+
+          def host_port(netloc):
+              if "@" in netloc:
+                  userinfo, hp = netloc.rsplit("@", 1)
+              else:
+                  userinfo, hp = "", netloc
+              if hp.startswith("["):
+                  h, rest = hp[1:].split("]", 1)
+                  port = int(rest.lstrip(":") or 0)
+              else:
+                  h, port_s = hp.rsplit(":", 1) if ":" in hp else (hp, "0")
+                  port = int(port_s or 0)
+              return userinfo, h, port
+
+          def common_transport(p, params):
+              net = (params.get("type") or params.get("network") or [""])[0]
+              security = (params.get("security") or [""])[0]
+              sni = (params.get("sni") or params.get("servername") or [""])[0]
+              fp = (params.get("fp") or params.get("client-fingerprint") or [""])[0]
+              host = (params.get("host") or [""])[0]
+              path = (params.get("path") or [""])[0]
+              service = (params.get("serviceName") or params.get("service-name") or [""])[0]
+              insecure = (params.get("allowInsecure") or params.get("insecure") or ["0"])[0]
+              if security in ("tls", "reality"):
+                  p["tls"] = True
+              if sni:
+                  p["servername"] = sni
+                  p["sni"] = sni
+              p["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
+              if fp:
+                  p["client-fingerprint"] = fp
+              if net:
+                  p["network"] = net
+              if net == "ws":
+                  ws = {}
+                  if path: ws["path"] = path
+                  if host: ws["headers"] = {"Host": host}
+                  if ws: p["ws-opts"] = ws
+              elif net == "grpc":
+                  grpc = {}
+                  if service: grpc["grpc-service-name"] = service
+                  if grpc: p["grpc-opts"] = grpc
+              return p
+
+          if raw.startswith("vmess://"):
+              data = json.loads(b64decode_text(raw[len("vmess://"):]))
+              name = data.get("ps") or name
+              p = {
+                  "name": name,
+                  "type": "vmess",
+                  "server": data.get("add"),
+                  "port": int(data.get("port")),
+                  "uuid": data.get("id"),
+                  "alterId": int(data.get("aid") or 0),
+                  "cipher": data.get("scy") or "auto",
+                  "udp": True,
+              }
+              if data.get("tls") == "tls":
+                  p["tls"] = True
+                  p["servername"] = data.get("sni") or data.get("host") or ""
+                  p["skip-cert-verify"] = False
+              if data.get("net"):
+                  p["network"] = data.get("net")
+              if data.get("net") == "ws":
+                  ws = {}
+                  if data.get("path"): ws["path"] = data.get("path")
+                  if data.get("host"): ws["headers"] = {"Host": data.get("host")}
+                  if ws: p["ws-opts"] = ws
+              elif data.get("net") == "grpc":
+                  if data.get("path"): p["grpc-opts"] = {"grpc-service-name": data.get("path")}
+
+          elif raw.startswith(("trojan://", "vless://", "hysteria2://", "hy2://")):
+              sp = urlsplit(raw)
+              scheme = "hysteria2" if sp.scheme == "hy2" else sp.scheme
+              params = parse_qs(sp.query)
+              userinfo, server, port = host_port(sp.netloc)
+              userinfo = unquote(userinfo)
+              p = {"name": name, "type": scheme, "server": server, "port": port, "udp": True}
+              if scheme == "trojan":
+                  p["password"] = userinfo
+                  common_transport(p, params)
+              elif scheme == "vless":
+                  p["uuid"] = userinfo
+                  flow = (params.get("flow") or [""])[0]
+                  if flow: p["flow"] = flow
+                  common_transport(p, params)
+              elif scheme == "hysteria2":
+                  p["password"] = userinfo
+                  sni = (params.get("sni") or params.get("peer") or [""])[0]
+                  insecure = (params.get("insecure") or params.get("allowInsecure") or ["0"])[0]
+                  if sni: p["sni"] = sni
+                  p["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
+
+          elif raw.startswith("ss://"):
+              sp = urlsplit(raw)
+              params = parse_qs(sp.query)
+              # SIP002: ss://BASE64(method:password)@server:port#name
+              if "@" in sp.netloc:
+                  userinfo, server, port = host_port(sp.netloc)
+                  decoded = b64decode_text(userinfo) if ":" not in userinfo else unquote(userinfo)
+                  cipher, password = decoded.split(":", 1)
+              else:
+                  decoded = b64decode_text(raw[len("ss://"):].split("#",1)[0].split("?",1)[0])
+                  user, hp = decoded.rsplit("@", 1)
+                  cipher, password = user.split(":", 1)
+                  server, port_s = hp.rsplit(":", 1)
+                  port = int(port_s)
+              p = {"name": name, "type": "ss", "server": server, "port": port, "cipher": cipher, "password": password, "udp": True}
+              plugin = (params.get("plugin") or [""])[0]
+              if plugin:
+                  print("⚠️ 检测到 SS plugin 参数，当前自动转换可能无法完整处理插件节点。")
+
+          else:
+              raise SystemExit("❌ 暂不支持的节点格式。请使用 trojan:// vmess:// vless:// ss:// hysteria2:// hy2:// 单节点链接")
+
+          config = """mixed-port: 10809
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+
+""" + emit_proxy(p) + """
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - """ + q(name) + """
+
+rules:
+  - MATCH,PROXY
+"""
+          open("mihomo-config.yaml", "w", encoding="utf-8").write(config)
+          print("✅ 已把 PROXY_NODE 转换为 Mihomo 配置")
+          print("✅ 节点类型：", p.get("type"))
+          print("✅ 节点名称：", name)
+          print("✅ 本地代理：127.0.0.1:10809")
+          PY
+
+      - name: Start Mihomo Proxy
+        run: |
+          set -e
+          nohup mihomo -f mihomo-config.yaml > mihomo.log 2>&1 &
+          echo $! > mihomo.pid
+
+          echo "等待 Mihomo 监听 10809..."
+          for i in {1..20}; do
+            if ss -ltn | grep -q ':10809'; then
+              echo "✅ Mihomo 已监听 127.0.0.1:10809"
+              break
+            fi
+            sleep 1
+          done
+
+          if ! ss -ltn | grep -q ':10809'; then
+            echo "❌ Mihomo 没有监听 10809，输出日志："
+            cat mihomo.log || true
+            exit 1
+          fi
+
+      - name: Test Proxy Access
+        run: |
+          echo "测试代理连通性，以下测试失败不会立即中断，方便继续查看脚本日志。"
+          echo "测试 Google 204："
+          curl -I --max-time 20 -x http://127.0.0.1:10809 https://www.gstatic.com/generate_204 || true
+          echo "测试 Zampto 主页："
+          curl -I --max-time 25 -x http://127.0.0.1:10809 https://zampto.com || true
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
-      # 整库拉取下来后，这两个文件百分之百在原地，绝不会报找不到文件的错
       - name: Install dependencies
         run: |
+          set -e
           echo "检查私库文件："
           ls -la zampto-core
 
@@ -99,13 +302,13 @@ jobs:
 
       - name: Run Zampto Script
         env:
-          # 仅传入单账号所需的 Secrets
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_PROXY: "127.0.0.1:10809"
         run: |
+          set -e
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "❌ 没找到 zampto-core/zampto-renew.py"
             exit 1
@@ -113,3 +316,16 @@ jobs:
 
           cd zampto-core
           python zampto-renew.py
+
+      - name: Upload Debug Files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zampto-debug-files
+          if-no-files-found: ignore
+          path: |
+            mihomo.log
+            zampto-core/login_failed.png
+            zampto-core/login_failed.html
+            zampto-core/*.png
+            zampto-core/*.html
