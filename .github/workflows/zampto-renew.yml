@@ -86,7 +86,16 @@ jobs:
       # 整库拉取下来后，这两个文件百分之百在原地，绝不会报找不到文件的错
       - name: Install dependencies
         run: |
-          pip install -r zampto-core/requirements.txt
+          echo "检查私库文件："
+          ls -la zampto-core
+
+          if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
+            echo "❌ 没找到 zampto-core/zampto-requirements.txt"
+            exit 1
+          fi
+
+          python -m pip install --upgrade pip
+          pip install -r zampto-core/zampto-requirements.txt
 
       - name: Run Zampto Script
         env:
@@ -97,5 +106,10 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_PROXY: "127.0.0.1:10809"
         run: |
+          if [ ! -f "zampto-core/zampto-renew.py" ]; then
+            echo "❌ 没找到 zampto-core/zampto-renew.py"
+            exit 1
+          fi
+
           cd zampto-core
           python zampto-renew.py
