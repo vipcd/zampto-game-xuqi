@@ -2,7 +2,7 @@ name: Zampto Auto Renew with Proxy
 
 on:
   schedule:
-    - cron: '19 */3 * * *'
+    - cron: '27 */3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,17 +13,21 @@ jobs:
       - name: Checkout Public Repo
         uses: actions/checkout@v4
 
-      - name: Checkout Private Core Repo (Sparse Checkout)
-        uses: actions/checkout@v4
-        with:
-          repository: 'vipcd/zhuanshu-jiaoben'
-          token: ${{ secrets.ZAMPTO_PAT }}
-          ref: 'main'  # 🌟【核心修复】直接指定私库分支（如果是 master 请改成 master），防止自动查询分支报 404
-          path: zampto-core
-          sparse-checkout-cone-mode: false # 🌟【核心修复】关闭锥形模式，允许只拉取单文件
-          sparse-checkout: |
-            zampto-renew.py
-            requirements.txt
+      # 🌟【核心改动】抛弃 Git 签出，直接通过 API 精确下载指定文件
+      - name: Download Specific Files from Private Repo (Precision Pull)
+        run: |
+          mkdir -p zampto-core
+          echo "📥 正在精准拉取私库中的 Python 脚本..."
+          # 🚨 注意：如果你的私库主分支叫 master，请把下面 URL 中的 main 改成 master
+          curl -fsSL -H "Authorization: token ${{ secrets.ZAMPTO_PAT }}" \
+            https://raw.githubusercontent.com/vipcd/zhuanshu-jiaoben/main/zampto-renew.py \
+            -o zampto-core/zampto-renew.py
+
+          echo "📥 正在精准拉取私库中的依赖文件..."
+          # 🚨 注意：如果你的依赖文件名在私库里叫 zampto-requirements.txt，请把下面 URL 末尾改掉
+          curl -fsSL -H "Authorization: token ${{ secrets.ZAMPTO_PAT }}" \
+            https://raw.githubusercontent.com/vipcd/zhuanshu-jiaoben/main/requirements.txt \
+            -o zampto-core/requirements.txt
 
       - name: Install Hysteria2 Client Core
         env:
