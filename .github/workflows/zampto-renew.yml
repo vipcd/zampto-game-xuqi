@@ -1,4 +1,4 @@
-name: Zampto Auto Renew with Universal Proxy Node
+name: Zampto Auto Renew Cookie Proxy
 
 on:
   schedule:
@@ -27,15 +27,11 @@ jobs:
           sudo apt-get install -y jq gzip
 
           echo "下载 Mihomo 最新 Linux amd64 内核..."
-          ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64.*\\.gz$")) | select(.name | test("compatible") | not) | .browser_download_url' \
-            | head -n 1)
+          ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest   | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64.*\.gz$")) | select(.name | test("compatible") | not) | .browser_download_url'   | head -n 1)
 
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
             echo "未找到普通 amd64 版本，尝试 compatible 版本..."
-            ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-              | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64-compatible.*\\.gz$")) | .browser_download_url' \
-              | head -n 1)
+            ASSET_URL=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest     | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64-compatible.*\.gz$")) | .browser_download_url'     | head -n 1)
           fi
 
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
@@ -165,14 +161,9 @@ jobs:
               data = json.loads(b64decode_text(raw[len("vmess://"):]))
               name = data.get("ps") or name
               proxy = {
-                  "name": name,
-                  "type": "vmess",
-                  "server": data.get("add"),
-                  "port": int(data.get("port")),
-                  "uuid": data.get("id"),
-                  "alterId": int(data.get("aid") or 0),
-                  "cipher": data.get("scy") or "auto",
-                  "udp": True,
+                  "name": name, "type": "vmess", "server": data.get("add"),
+                  "port": int(data.get("port")), "uuid": data.get("id"),
+                  "alterId": int(data.get("aid") or 0), "cipher": data.get("scy") or "auto", "udp": True,
               }
               if data.get("tls") == "tls":
                   proxy["tls"] = True
@@ -188,9 +179,8 @@ jobs:
                       ws_opts["headers"] = {"Host": data.get("host")}
                   if ws_opts:
                       proxy["ws-opts"] = ws_opts
-              elif data.get("net") == "grpc":
-                  if data.get("path"):
-                      proxy["grpc-opts"] = {"grpc-service-name": data.get("path")}
+              elif data.get("net") == "grpc" and data.get("path"):
+                  proxy["grpc-opts"] = {"grpc-service-name": data.get("path")}
 
           elif raw.startswith(("trojan://", "vless://", "hysteria2://", "hy2://")):
               sp = urlsplit(raw)
@@ -236,24 +226,12 @@ jobs:
               raise SystemExit("❌ 暂不支持的节点格式。请使用 trojan:// vmess:// vless:// ss:// hysteria2:// hy2:// 单节点链接")
 
           config_lines = [
-              "mixed-port: 10809",
-              "allow-lan: false",
-              "mode: rule",
-              "log-level: info",
-              "ipv6: false",
-              "",
+              "mixed-port: 10809", "allow-lan: false", "mode: rule", "log-level: info", "ipv6: false", "",
           ]
           config_lines.extend(emit_proxy(proxy))
           config_lines.extend([
-              "",
-              "proxy-groups:",
-              "  - name: PROXY",
-              "    type: select",
-              "    proxies:",
-              "      - " + q(name),
-              "",
-              "rules:",
-              "  - MATCH,PROXY",
+              "", "proxy-groups:", "  - name: PROXY", "    type: select", "    proxies:", "      - " + q(name),
+              "", "rules:", "  - MATCH,PROXY",
           ])
           open("mihomo-config.yaml", "w", encoding="utf-8").write("\n".join(config_lines) + "\n")
           print("✅ 已把 PROXY_NODE 转换为 Mihomo 配置")
@@ -270,7 +248,7 @@ jobs:
           echo $! > mihomo.pid
 
           echo "等待 Mihomo 监听 10809..."
-          for i in {{1..20}}; do
+          for i in {1..20}; do
             if ss -ltn | grep -q ':10809'; then
               echo "✅ Mihomo 已监听 127.0.0.1:10809"
               break
@@ -286,11 +264,15 @@ jobs:
 
       - name: Test Proxy Access
         run: |
-          echo "测试代理连通性，以下测试失败不会立即中断，方便继续查看脚本日志。"
-          echo "测试 Google 204："
+          echo "测试代理连通性，以下测试失败不会立即中断，方便查看脚本日志。"
+          echo "测试 Google 204（走代理）："
           curl -I --max-time 20 -x http://127.0.0.1:10809 https://www.gstatic.com/generate_204 || true
-          echo "测试 Zampto 主页："
-          curl -I --max-time 25 -x http://127.0.0.1:10809 https://zampto.com || true
+
+          echo "测试 Zampto 官网（走代理）："
+          curl -I -L --max-time 30 -x http://127.0.0.1:10809 https://zampto.net/ || true
+
+          echo "测试 Zampto 续期页面（走代理）："
+          curl -I -L --max-time 30 -x http://127.0.0.1:10809 "https://dash.zampto.net/server?id=9692" || true
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
@@ -314,10 +296,11 @@ jobs:
       - name: Run Zampto Script
         env:
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
-          ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
           ZAMPTO_PROXY: "127.0.0.1:10809"
+          ZAMPTO_COOKIES_JSON: ${{ secrets.ZAMPTO_COOKIES_JSON }}
         run: |
           set -e
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
@@ -336,7 +319,6 @@ jobs:
           if-no-files-found: ignore
           path: |
             mihomo.log
-            zampto-core/login_failed.png
-            zampto-core/login_failed.html
+            zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
