@@ -26,8 +26,14 @@ jobs:
 
       - name: Install Hysteria2 Client Core
         run: |
-          echo "📥 正在下载并安装官方 Hysteria 2..."
-          sudo bash <(curl -fsSL https://get.hy2.sh/) --verbose
+          echo "📥 正在下载官方 Hysteria 2 安装脚本..."
+          curl -fsSL https://get.hy2.sh/ -o install_hy2.sh
+          
+          echo "📥 正在执行安装..."
+          sudo bash install_hy2.sh --verbose
+          
+          echo "🧹 清理临时安装脚本..."
+          rm install_hy2.sh
 
       - name: Parse Hysteria2 URI & Generate Config
         env:
