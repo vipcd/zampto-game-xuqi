@@ -2,7 +2,7 @@ name: Zampto Auto Renew with Proxy
 
 on:
   schedule:
-    - cron: '32 */3 * * *'
+    - cron: '19 */3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,10 +16,11 @@ jobs:
       - name: Checkout Private Core Repo (Sparse Checkout)
         uses: actions/checkout@v4
         with:
-          repository: 'vipcd/zhuanyong-jiaoben' # 🚨 请修改为你自己的私库路径
+          repository: 'vipcd/zhuanyong-jiaoben'
           token: ${{ secrets.ZAMPTO_PAT }}
+          ref: 'main'  # 🌟【核心修复】直接指定私库分支（如果是 master 请改成 master），防止自动查询分支报 404
           path: zampto-core
-          # 🌟 精确拉取指定文件名，私库中的其他任何脚本绝对不会被下载
+          sparse-checkout-cone-mode: false # 🌟【核心修复】关闭锥形模式，允许只拉取单文件
           sparse-checkout: |
             zampto-renew.py
             requirements.txt
@@ -96,12 +97,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 🚨 这里的依赖文件名，请确保和你在上面 sparse-checkout 里写的一致（requirements.txt）
           pip install -r zampto-core/requirements.txt
 
       - name: Run Zampto Script
         env:
-          # 🚨 传入单账号所需的全部 Secrets
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
