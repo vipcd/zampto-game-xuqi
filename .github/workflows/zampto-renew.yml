@@ -60,15 +60,13 @@ jobs:
             exit 1
           fi
 
-          python3 <<'PY'
-          import os, re, json, base64, html
+          cat > convert_node.py <<'PY'
+          import os, json, base64, html
           from urllib.parse import urlsplit, parse_qs, unquote
 
           raw = html.unescape(os.environ.get("PROXY_NODE", "").strip())
           if not raw:
               raise SystemExit("PROXY_NODE 为空")
-
-          # 只取第一行，避免误粘贴多个节点或订阅内容
           raw = raw.splitlines()[0].strip()
           name = "v2rayn-node"
           if "#" in raw:
@@ -89,30 +87,31 @@ jobs:
                   return str(v)
               if v is None:
                   return "''"
-              s = str(v)
-              return json.dumps(s, ensure_ascii=False)
+              return json.dumps(str(v), ensure_ascii=False)
 
-          def emit_proxy(p):
-              lines = ["proxies:", "  - name: " + q(p.pop("name", name))]
+          def emit_proxy(proxy):
+              proxy = dict(proxy)
+              lines = ["proxies:", "  - name: " + q(proxy.pop("name", name))]
               order = ["type", "server", "port", "uuid", "password", "cipher", "alterId", "udp", "tls", "servername", "sni", "skip-cert-verify", "network", "flow", "client-fingerprint"]
               nested = []
-              for k in order + [x for x in p.keys() if x not in order]:
-                  if k not in p: continue
-                  v = p[k]
-                  if isinstance(v, dict):
-                      nested.append((k, v))
+              for key in order + [x for x in proxy.keys() if x not in order]:
+                  if key not in proxy:
+                      continue
+                  value = proxy[key]
+                  if isinstance(value, dict):
+                      nested.append((key, value))
                   else:
-                      lines.append(f"    {k}: {q(v)}")
-              for k, d in nested:
-                  lines.append(f"    {k}:")
-                  for dk, dv in d.items():
+                      lines.append(f"    {key}: {q(value)}")
+              for key, data in nested:
+                  lines.append(f"    {key}:")
+                  for dk, dv in data.items():
                       if isinstance(dv, dict):
                           lines.append(f"      {dk}:")
                           for xk, xv in dv.items():
                               lines.append(f"        {xk}: {q(xv)}")
                       else:
                           lines.append(f"      {dk}: {q(dv)}")
-              return "\n".join(lines)
+              return lines
 
           def host_port(netloc):
               if "@" in netloc:
@@ -120,14 +119,14 @@ jobs:
               else:
                   userinfo, hp = "", netloc
               if hp.startswith("["):
-                  h, rest = hp[1:].split("]", 1)
+                  host, rest = hp[1:].split("]", 1)
                   port = int(rest.lstrip(":") or 0)
               else:
-                  h, port_s = hp.rsplit(":", 1) if ":" in hp else (hp, "0")
+                  host, port_s = hp.rsplit(":", 1) if ":" in hp else (hp, "0")
                   port = int(port_s or 0)
-              return userinfo, h, port
+              return userinfo, host, port
 
-          def common_transport(p, params):
+          def common_transport(proxy, params):
               net = (params.get("type") or params.get("network") or [""])[0]
               security = (params.get("security") or [""])[0]
               sni = (params.get("sni") or params.get("servername") or [""])[0]
@@ -137,30 +136,35 @@ jobs:
               service = (params.get("serviceName") or params.get("service-name") or [""])[0]
               insecure = (params.get("allowInsecure") or params.get("insecure") or ["0"])[0]
               if security in ("tls", "reality"):
-                  p["tls"] = True
+                  proxy["tls"] = True
               if sni:
-                  p["servername"] = sni
-                  p["sni"] = sni
-              p["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
+                  proxy["servername"] = sni
+                  proxy["sni"] = sni
+              proxy["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
               if fp:
-                  p["client-fingerprint"] = fp
+                  proxy["client-fingerprint"] = fp
               if net:
-                  p["network"] = net
+                  proxy["network"] = net
               if net == "ws":
-                  ws = {}
-                  if path: ws["path"] = path
-                  if host: ws["headers"] = {"Host": host}
-                  if ws: p["ws-opts"] = ws
+                  ws_opts = {}
+                  if path:
+                      ws_opts["path"] = path
+                  if host:
+                      ws_opts["headers"] = {"Host": host}
+                  if ws_opts:
+                      proxy["ws-opts"] = ws_opts
               elif net == "grpc":
-                  grpc = {}
-                  if service: grpc["grpc-service-name"] = service
-                  if grpc: p["grpc-opts"] = grpc
-              return p
+                  grpc_opts = {}
+                  if service:
+                      grpc_opts["grpc-service-name"] = service
+                  if grpc_opts:
+                      proxy["grpc-opts"] = grpc_opts
+              return proxy
 
           if raw.startswith("vmess://"):
               data = json.loads(b64decode_text(raw[len("vmess://"):]))
               name = data.get("ps") or name
-              p = {
+              proxy = {
                   "name": name,
                   "type": "vmess",
                   "server": data.get("add"),
@@ -171,18 +175,22 @@ jobs:
                   "udp": True,
               }
               if data.get("tls") == "tls":
-                  p["tls"] = True
-                  p["servername"] = data.get("sni") or data.get("host") or ""
-                  p["skip-cert-verify"] = False
+                  proxy["tls"] = True
+                  proxy["servername"] = data.get("sni") or data.get("host") or ""
+                  proxy["skip-cert-verify"] = False
               if data.get("net"):
-                  p["network"] = data.get("net")
+                  proxy["network"] = data.get("net")
               if data.get("net") == "ws":
-                  ws = {}
-                  if data.get("path"): ws["path"] = data.get("path")
-                  if data.get("host"): ws["headers"] = {"Host": data.get("host")}
-                  if ws: p["ws-opts"] = ws
+                  ws_opts = {}
+                  if data.get("path"):
+                      ws_opts["path"] = data.get("path")
+                  if data.get("host"):
+                      ws_opts["headers"] = {"Host": data.get("host")}
+                  if ws_opts:
+                      proxy["ws-opts"] = ws_opts
               elif data.get("net") == "grpc":
-                  if data.get("path"): p["grpc-opts"] = {"grpc-service-name": data.get("path")}
+                  if data.get("path"):
+                      proxy["grpc-opts"] = {"grpc-service-name": data.get("path")}
 
           elif raw.startswith(("trojan://", "vless://", "hysteria2://", "hy2://")):
               sp = urlsplit(raw)
@@ -190,67 +198,70 @@ jobs:
               params = parse_qs(sp.query)
               userinfo, server, port = host_port(sp.netloc)
               userinfo = unquote(userinfo)
-              p = {"name": name, "type": scheme, "server": server, "port": port, "udp": True}
+              proxy = {"name": name, "type": scheme, "server": server, "port": port, "udp": True}
               if scheme == "trojan":
-                  p["password"] = userinfo
-                  common_transport(p, params)
+                  proxy["password"] = userinfo
+                  common_transport(proxy, params)
               elif scheme == "vless":
-                  p["uuid"] = userinfo
+                  proxy["uuid"] = userinfo
                   flow = (params.get("flow") or [""])[0]
-                  if flow: p["flow"] = flow
-                  common_transport(p, params)
+                  if flow:
+                      proxy["flow"] = flow
+                  common_transport(proxy, params)
               elif scheme == "hysteria2":
-                  p["password"] = userinfo
+                  proxy["password"] = userinfo
                   sni = (params.get("sni") or params.get("peer") or [""])[0]
                   insecure = (params.get("insecure") or params.get("allowInsecure") or ["0"])[0]
-                  if sni: p["sni"] = sni
-                  p["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
+                  if sni:
+                      proxy["sni"] = sni
+                  proxy["skip-cert-verify"] = str(insecure).lower() in ("1", "true", "yes")
 
           elif raw.startswith("ss://"):
               sp = urlsplit(raw)
               params = parse_qs(sp.query)
-              # SIP002: ss://BASE64(method:password)@server:port#name
               if "@" in sp.netloc:
                   userinfo, server, port = host_port(sp.netloc)
                   decoded = b64decode_text(userinfo) if ":" not in userinfo else unquote(userinfo)
                   cipher, password = decoded.split(":", 1)
               else:
-                  decoded = b64decode_text(raw[len("ss://"):].split("#",1)[0].split("?",1)[0])
+                  decoded = b64decode_text(raw[len("ss://"):].split("#", 1)[0].split("?", 1)[0])
                   user, hp = decoded.rsplit("@", 1)
                   cipher, password = user.split(":", 1)
                   server, port_s = hp.rsplit(":", 1)
                   port = int(port_s)
-              p = {"name": name, "type": "ss", "server": server, "port": port, "cipher": cipher, "password": password, "udp": True}
-              plugin = (params.get("plugin") or [""])[0]
-              if plugin:
+              proxy = {"name": name, "type": "ss", "server": server, "port": port, "cipher": cipher, "password": password, "udp": True}
+              if (params.get("plugin") or [""])[0]:
                   print("⚠️ 检测到 SS plugin 参数，当前自动转换可能无法完整处理插件节点。")
-
           else:
               raise SystemExit("❌ 暂不支持的节点格式。请使用 trojan:// vmess:// vless:// ss:// hysteria2:// hy2:// 单节点链接")
 
-          config = """mixed-port: 10809
-allow-lan: false
-mode: rule
-log-level: info
-ipv6: false
-
-""" + emit_proxy(p) + """
-
-proxy-groups:
-  - name: PROXY
-    type: select
-    proxies:
-      - """ + q(name) + """
-
-rules:
-  - MATCH,PROXY
-"""
-          open("mihomo-config.yaml", "w", encoding="utf-8").write(config)
+          config_lines = [
+              "mixed-port: 10809",
+              "allow-lan: false",
+              "mode: rule",
+              "log-level: info",
+              "ipv6: false",
+              "",
+          ]
+          config_lines.extend(emit_proxy(proxy))
+          config_lines.extend([
+              "",
+              "proxy-groups:",
+              "  - name: PROXY",
+              "    type: select",
+              "    proxies:",
+              "      - " + q(name),
+              "",
+              "rules:",
+              "  - MATCH,PROXY",
+          ])
+          open("mihomo-config.yaml", "w", encoding="utf-8").write("\n".join(config_lines) + "\n")
           print("✅ 已把 PROXY_NODE 转换为 Mihomo 配置")
-          print("✅ 节点类型：", p.get("type"))
+          print("✅ 节点类型：", proxy.get("type"))
           print("✅ 节点名称：", name)
           print("✅ 本地代理：127.0.0.1:10809")
           PY
+          python3 convert_node.py
 
       - name: Start Mihomo Proxy
         run: |
@@ -259,7 +270,7 @@ rules:
           echo $! > mihomo.pid
 
           echo "等待 Mihomo 监听 10809..."
-          for i in {1..20}; do
+          for i in {{1..20}}; do
             if ss -ltn | grep -q ':10809'; then
               echo "✅ Mihomo 已监听 127.0.0.1:10809"
               break
