@@ -2,7 +2,7 @@ name: Zampto Auto Renew with Proxy
 
 on:
   schedule:
-    - cron: '27 */3 * * *'
+    - cron: '24 */3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,31 +13,20 @@ jobs:
       - name: Checkout Public Repo
         uses: actions/checkout@v4
 
-      # 🌟【核心改动】抛弃 Git 签出，直接通过 API 精确下载指定文件
-      - name: Download Specific Files from Private Repo (Precision Pull)
-        run: |
-          mkdir -p zampto-core
-          echo "📥 正在精准拉取私库中的 Python 脚本..."
-          # 🚨 注意：如果你的私库主分支叫 master，请把下面 URL 中的 main 改成 master
-          curl -fsSL -H "Authorization: token ${{ secrets.ZAMPTO_PAT }}" \
-            https://raw.githubusercontent.com/vipcd/zhuanshu-jiaoben/main/zampto-renew.py \
-            -o zampto-core/zampto-renew.py
-
-          echo "📥 正在精准拉取私库中的依赖文件..."
-          # 🚨 注意：如果你的依赖文件名在私库里叫 zampto-requirements.txt，请把下面 URL 末尾改掉
-          curl -fsSL -H "Authorization: token ${{ secrets.ZAMPTO_PAT }}" \
-            https://raw.githubusercontent.com/vipcd/zhuanshu-jiaoben/main/requirements.txt \
-            -o zampto-core/requirements.txt
+      # 🌟【彻底恢复】不用任何稀疏拉取和 curl，用回你之前完全正常的标准整库拉取
+      - name: Checkout Private Core Repo
+        uses: actions/checkout@v4
+        with:
+          repository: 'vipcd/zhuanshu-jiaoben'
+          token: ${{ secrets.ZAMPTO_PAT }}
+          path: zampto-core
 
       - name: Install Hysteria2 Client Core
         env:
           TERM: xterm
         run: |
-          echo "📥 正在下载官方 Hysteria 2 安装脚本..."
           curl -fsSL https://get.hy2.sh/ -o install_hy2.sh
-          echo "📥 正在执行安装..."
           sudo bash install_hy2.sh
-          echo "🧹 清理临时安装脚本..."
           rm install_hy2.sh
 
       - name: Parse Hysteria2 URI & Generate Config
@@ -48,7 +37,7 @@ jobs:
           import os, json, re
           uri = os.environ.get('HYSTERIA2_NODE', '').strip()
           if not uri:
-              print('❌ 未检测到配置的 HYSTERIA2_NODE，跳过代理生成')
+              print('❌ 未检测到配置的 HYSTERIA2_NODE')
               exit(1)
           
           clean_uri = uri.split('#')[0]
@@ -72,9 +61,6 @@ jobs:
           if match_sni: 
               sni = match_sni.group(1)
               
-          if 'insecure=1' in query_str or 'allowInsecure=1' in query_str:
-              insecure = True
-              
           config = {
               'server': server,
               'auth': auth,
@@ -85,26 +71,26 @@ jobs:
           
           with open('hy2_config.json', 'w') as f:
               json.dump(config, f, indent=2)
-          print('✅ Hysteria 2 本地配置文件生成成功！')
           "
 
       - name: Start Hysteria2 Tunnel Backend
         run: |
           hysteria client -c hy2_config.json >/dev/null 2>&1 &
           sleep 4
-          echo "🌐 本地网络中转通路已就绪"
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
+      # 整库拉取下来后，这两个文件百分之百在原地，绝不会报找不到文件的错
       - name: Install dependencies
         run: |
           pip install -r zampto-core/requirements.txt
 
       - name: Run Zampto Script
         env:
+          # 仅传入单账号所需的 Secrets
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
