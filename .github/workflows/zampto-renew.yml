@@ -2,7 +2,7 @@ name: Zampto Auto Renew with Proxy
 
 on:
   schedule:
-    - cron: '37 */3 * * *'
+    - cron: '32 */3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,24 +16,22 @@ jobs:
       - name: Checkout Private Core Repo (Sparse Checkout)
         uses: actions/checkout@v4
         with:
-          repository: 'vipcd/zhuanshu-jiaoben' # 🚨请修改为你自己的私库名
+          repository: 'vipcd/zhuanyong-jiaoben' # 🚨 请修改为你自己的私库路径
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
-          # 🌟【核心改动】开启稀疏签出，指定只拉取这两个文件，私库里的其他脚本绝不下载
+          # 🌟 精确拉取指定文件名，私库中的其他任何脚本绝对不会被下载
           sparse-checkout: |
             zampto-renew.py
-            zampto-requirements.txt
+            requirements.txt
 
       - name: Install Hysteria2 Client Core
         env:
-          TERM: xterm  # 🌟 顺手解决 tput: unknown terminal 警告，让日志更干净
+          TERM: xterm
         run: |
           echo "📥 正在下载官方 Hysteria 2 安装脚本..."
           curl -fsSL https://get.hy2.sh/ -o install_hy2.sh
-          
           echo "📥 正在执行安装..."
           sudo bash install_hy2.sh
-          
           echo "🧹 清理临时安装脚本..."
           rm install_hy2.sh
 
@@ -41,7 +39,6 @@ jobs:
         env:
           HYSTERIA2_NODE: ${{ secrets.HYSTERIA2_NODE }}
         run: |
-          # 安全解析 Hysteria2 节点长链接，生成本地临时 JSON 配置
           python3 -c "
           import os, json, re
           uri = os.environ.get('HYSTERIA2_NODE', '').strip()
@@ -88,8 +85,6 @@ jobs:
 
       - name: Start Hysteria2 Tunnel Backend
         run: |
-          echo "🚀 正在启动 Hysteria 2 后台隧道..."
-          # 后台常驻运行，将 Hysteria2 转换为本地标准 HTTP 代理 (10809)
           hysteria client -c hy2_config.json >/dev/null 2>&1 &
           sleep 4
           echo "🌐 本地网络中转通路已就绪"
@@ -101,11 +96,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 此时 zampto-core 文件夹内只有通过稀疏签出的两个指定文件
-          pip install -r zampto-core/zampto-requirements.txt
+          # 🚨 这里的依赖文件名，请确保和你在上面 sparse-checkout 里写的一致（requirements.txt）
+          pip install -r zampto-core/requirements.txt
 
       - name: Run Zampto Script
         env:
+          # 🚨 传入单账号所需的全部 Secrets
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
