@@ -25,12 +25,14 @@ jobs:
             zampto-requirements.txt
 
       - name: Install Hysteria2 Client Core
+        env:
+          TERM: xterm  # 🌟 顺手解决 tput: unknown terminal 警告，让日志更干净
         run: |
           echo "📥 正在下载官方 Hysteria 2 安装脚本..."
           curl -fsSL https://get.hy2.sh/ -o install_hy2.sh
           
           echo "📥 正在执行安装..."
-          sudo bash install_hy2.sh --verbose
+          sudo bash install_hy2.sh
           
           echo "🧹 清理临时安装脚本..."
           rm install_hy2.sh
