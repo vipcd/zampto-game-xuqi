@@ -16,7 +16,7 @@ jobs:
       - name: Checkout Private Core Repo (Sparse Checkout)
         uses: actions/checkout@v4
         with:
-          repository: 'vipcd/zhuanyong-jiaoben'
+          repository: 'vipcd/zhuanshu-jiaoben'
           token: ${{ secrets.ZAMPTO_PAT }}
           ref: 'main'  # 🌟【核心修复】直接指定私库分支（如果是 master 请改成 master），防止自动查询分支报 404
           path: zampto-core
