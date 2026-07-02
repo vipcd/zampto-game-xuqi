@@ -1,4 +1,4 @@
-name: Zampto Auto Renew SSH Proxy
+name: Zampto Auto Renew SSH Proxy Password Login
 
 on:
   schedule:
@@ -81,7 +81,7 @@ jobs:
           tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
           chmod +x gost
 
-          echo "Starting local HTTP proxy: 127.0.0.1:10809 -> socks5h://127.0.0.1:10808"
+          echo "Starting local HTTP proxy: 127.0.0.1:10809 -> socks5://127.0.0.1:10808"
           nohup ./gost -L http://:10809 -F socks5://127.0.0.1:10808 > gost.log 2>&1 &
           echo $! > gost.pid
 
@@ -134,16 +134,26 @@ jobs:
       - name: Run Zampto Script
         env:
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
+          ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
           ZAMPTO_PROXY: 127.0.0.1:10809
-          ZAMPTO_COOKIES_JSON: ${{ secrets.ZAMPTO_COOKIES_JSON }}
         run: |
           set -e
 
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
+            exit 1
+          fi
+
+          if [ -z "$ZAMPTO_EMAIL" ]; then
+            echo "Missing secret: ZAMPTO_EMAIL"
+            exit 1
+          fi
+
+          if [ -z "$ZAMPTO_PASSWORD" ]; then
+            echo "Missing secret: ZAMPTO_PASSWORD"
             exit 1
           fi
 
