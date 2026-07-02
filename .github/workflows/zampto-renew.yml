@@ -41,15 +41,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sshpass openssh-client curl wget tar iproute2
 
-          nohup sshpass -p "$SSH_PASSWORD" ssh -N \
-            -D 127.0.0.1:10808 \
-            -p "$SSH_PORT" \
-            "$SSH_USER@$SSH_HOST" \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=3 \
-            > ssh-tunnel.log 2>&1 &
+          nohup sshpass -p "$SSH_PASSWORD" ssh -N             -D 127.0.0.1:10808             -p "$SSH_PORT"             "$SSH_USER@$SSH_HOST"             -o StrictHostKeyChecking=no             -o UserKnownHostsFile=/dev/null             -o ServerAliveInterval=30             -o ServerAliveCountMax=3             > ssh-tunnel.log 2>&1 &
 
           echo $! > ssh-tunnel.pid
           sleep 6
@@ -118,14 +110,10 @@ jobs:
 
       - name: Run Zampto Script
         env:
-          # 你的脚本实际读取这两个变量
           ZAMPTO_USER: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASS: ${{ secrets.ZAMPTO_PASSWORD }}
-
-          # 保留兼容变量
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
-
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
@@ -148,7 +136,22 @@ jobs:
             exit 1
           fi
 
-          cd zampto-core
+          # 如果公开仓库根目录存在登录修复补丁，则先应用补丁；然后必须继续运行主脚本。
+          if [ -f "apply_login_fix_v2.py" ]; then
+            echo "Found apply_login_fix_v2.py in public repo root. Applying login patch..."
+            cp apply_login_fix_v2.py zampto-core/
+            cd zampto-core
+            python apply_login_fix_v2.py
+          elif [ -f "zampto-core/apply_login_fix_v2.py" ]; then
+            echo "Found apply_login_fix_v2.py in private repo. Applying login patch..."
+            cd zampto-core
+            python apply_login_fix_v2.py
+          else
+            echo "No apply_login_fix_v2.py found. Running original zampto-renew.py directly."
+            cd zampto-core
+          fi
+
+          echo "Starting Zampto main script..."
           python zampto-renew.py
 
       - name: Upload Debug Files
@@ -163,6 +166,7 @@ jobs:
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
+            zampto-core/zampto-renew.py.bak-*
 
       - name: Keep Only Latest 3 Workflow Runs
         if: always()
@@ -173,9 +177,7 @@ jobs:
         run: |
           set +e
 
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt \
-            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' \
-            | while read -r RUN_ID; do
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
                 if [ -n "$RUN_ID" ]; then
                   echo "Deleting workflow run: $RUN_ID"
                   gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
