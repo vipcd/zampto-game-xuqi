@@ -1,4 +1,4 @@
-name: Zampto Auto Renew GOST Proxy
+name: Zampto Auto Renew SSH Proxy
 
 on:
   schedule:
@@ -20,21 +20,56 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      - name: Install and Start GOST Proxy
+      - name: Start SSH Tunnel Proxy
         env:
-          GOST_PROXY: ${{ secrets.GOST_PROXY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           set -e
 
-          if [ -z "$GOST_PROXY" ]; then
-            echo "GOST_PROXY secret is missing"
-            echo "Set it to: http://USERNAME:PASSWORD@31.22.111.169:23044"
+          if [ -z "$SSH_HOST" ]; then
+            echo "Missing secret: SSH_HOST"
+            exit 1
+          fi
+
+          if [ -z "$SSH_PORT" ]; then
+            echo "Missing secret: SSH_PORT"
+            exit 1
+          fi
+
+          if [ -z "$SSH_USER" ]; then
+            echo "Missing secret: SSH_USER"
+            exit 1
+          fi
+
+          if [ -z "$SSH_PASSWORD" ]; then
+            echo "Missing secret: SSH_PASSWORD"
             exit 1
           fi
 
           sudo apt-get update
-          sudo apt-get install -y wget curl tar iproute2
+          sudo apt-get install -y sshpass openssh-client curl wget tar iproute2
 
+          echo "Starting SSH SOCKS5 tunnel on 127.0.0.1:10808"
+          nohup sshpass -p "$SSH_PASSWORD" ssh -N             -D 127.0.0.1:10808             -p "$SSH_PORT"             "$SSH_USER@$SSH_HOST"             -o StrictHostKeyChecking=no             -o UserKnownHostsFile=/dev/null             -o ServerAliveInterval=30             -o ServerAliveCountMax=3             > ssh-tunnel.log 2>&1 &
+
+          echo $! > ssh-tunnel.pid
+          sleep 6
+
+          echo "Testing SSH SOCKS5 proxy"
+          EXIT_IP=$(curl -s --connect-timeout 25 -x socks5h://127.0.0.1:10808 https://api.ipify.org || true)
+
+          if [ -z "$EXIT_IP" ]; then
+            echo "SSH SOCKS5 proxy test failed"
+            cat ssh-tunnel.log || true
+            exit 1
+          fi
+
+          echo "SSH SOCKS5 proxy exit IP: $EXIT_IP"
+
+          echo "Downloading GOST to convert SOCKS5 to HTTP proxy"
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
 
           if [ -z "$VERSION" ]; then
@@ -46,16 +81,11 @@ jobs:
           tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
           chmod +x gost
 
-          nohup ./gost -L http://:10809 -F "$GOST_PROXY" > gost.log 2>&1 &
+          echo "Starting local HTTP proxy: 127.0.0.1:10809 -> socks5h://127.0.0.1:10808"
+          nohup ./gost -L http://:10809 -F socks5://127.0.0.1:10808 > gost.log 2>&1 &
           echo $! > gost.pid
 
-          for i in {1..20}; do
-            if ss -ltn | grep -q ':10809'; then
-              echo "GOST is listening on 127.0.0.1:10809"
-              break
-            fi
-            sleep 1
-          done
+          sleep 3
 
           if ! ss -ltn | grep -q ':10809'; then
             echo "GOST did not listen on 10809"
@@ -63,18 +93,22 @@ jobs:
             exit 1
           fi
 
-      - name: Test Proxy Access
-        run: |
-          set -e
-          EXIT_IP=$(curl -s --connect-timeout 20 -x http://127.0.0.1:10809 https://api.ipify.org || true)
+          echo "Testing HTTP proxy"
+          EXIT_IP2=$(curl -s --connect-timeout 25 -x http://127.0.0.1:10809 https://api.ipify.org || true)
 
-          if [ -z "$EXIT_IP" ]; then
-            echo "GOST proxy test failed"
+          if [ -z "$EXIT_IP2" ]; then
+            echo "HTTP proxy test failed"
+            cat ssh-tunnel.log || true
             cat gost.log || true
             exit 1
           fi
 
-          echo "Proxy exit IP: $EXIT_IP"
+          echo "HTTP proxy exit IP: $EXIT_IP2"
+
+      - name: Test Proxy Access
+        run: |
+          set -e
+          echo "Testing Zampto website through local HTTP proxy"
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 https://zampto.net/ || true
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 "https://dash.zampto.net/server?id=9692" || true
 
@@ -86,6 +120,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
+          echo "Checking private repo files"
           ls -la zampto-core
 
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
@@ -122,6 +157,7 @@ jobs:
           name: zampto-debug-files
           if-no-files-found: ignore
           path: |
+            ssh-tunnel.log
             gost.log
             zampto-core/zampto_result.png
             zampto-core/*.png
