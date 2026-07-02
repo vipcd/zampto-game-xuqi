@@ -16,35 +16,29 @@ jobs:
       - name: Checkout Private Core Repo
         uses: actions/checkout@v4
         with:
-          repository: 'vipcd/zhuanshu-jiaoben'
+          repository: vipcd/zhuanshu-jiaoben
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
       - name: Install and Start GOST Proxy
         env:
-          # GitHub Secrets 里添加：
-          # Name: GOST_PROXY
-          # Value: http://用户名:密码@31.22.111.169:23044
           GOST_PROXY: ${{ secrets.GOST_PROXY }}
         run: |
           set -e
 
           if [ -z "$GOST_PROXY" ]; then
-            echo "❌ 未检测到 GitHub Secret: GOST_PROXY"
-            echo "请在 GitHub 仓库 Settings -> Secrets and variables -> Actions 添加："
-            echo "Name: GOST_PROXY"
-            echo "Value: http://用户名:密码@31.22.111.169:23044"
+            echo "GOST_PROXY secret is missing"
+            echo "Set it to: http://USERNAME:PASSWORD@31.22.111.169:23044"
             exit 1
           fi
 
           sudo apt-get update
-          sudo apt-get install -y wget curl tar
+          sudo apt-get install -y wget curl tar iproute2
 
-          echo "下载 GOST 最新 Linux amd64 版本..."
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
 
           if [ -z "$VERSION" ]; then
-            echo "❌ 获取 GOST 版本失败"
+            echo "Failed to get GOST version"
             exit 1
           fi
 
@@ -52,22 +46,19 @@ jobs:
           tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
           chmod +x gost
 
-          # 保持原脚本兼容：本地代理仍使用 127.0.0.1:10809
-          echo "启动 GOST 本地代理：127.0.0.1:10809 -> GOST_PROXY"
           nohup ./gost -L http://:10809 -F "$GOST_PROXY" > gost.log 2>&1 &
           echo $! > gost.pid
 
-          echo "等待 GOST 监听 10809..."
           for i in {1..20}; do
             if ss -ltn | grep -q ':10809'; then
-              echo "✅ GOST 已监听 127.0.0.1:10809"
+              echo "GOST is listening on 127.0.0.1:10809"
               break
             fi
             sleep 1
           done
 
           if ! ss -ltn | grep -q ':10809'; then
-            echo "❌ GOST 没有监听 10809，输出日志："
+            echo "GOST did not listen on 10809"
             cat gost.log || true
             exit 1
           fi
@@ -75,36 +66,30 @@ jobs:
       - name: Test Proxy Access
         run: |
           set -e
-          echo "测试代理出口 IP："
           EXIT_IP=$(curl -s --connect-timeout 20 -x http://127.0.0.1:10809 https://api.ipify.org || true)
 
           if [ -z "$EXIT_IP" ]; then
-            echo "❌ GOST 代理测试失败，输出日志："
+            echo "GOST proxy test failed"
             cat gost.log || true
             exit 1
           fi
 
-          echo "$EXIT_IP" | sed 's/\([0-9]*\)\..*/✅ 当前代理出口 IP: .*.*.*/'
-
-          echo "测试 Zampto 官网（走代理）："
+          echo "Proxy exit IP: $EXIT_IP"
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 https://zampto.net/ || true
-
-          echo "测试 Zampto 续期页面（走代理）："
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 "https://dash.zampto.net/server?id=9692" || true
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           set -e
-          echo "检查私库文件："
           ls -la zampto-core
 
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
-            echo "❌ 没找到 zampto-core/zampto-requirements.txt"
+            echo "zampto-core/zampto-requirements.txt not found"
             exit 1
           fi
 
@@ -117,13 +102,13 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
-          # 保持原脚本变量不变，只是后端从 Mihomo 换成 GOST
-          ZAMPTO_PROXY: "127.0.0.1:10809"
+          ZAMPTO_PROXY: 127.0.0.1:10809
           ZAMPTO_COOKIES_JSON: ${{ secrets.ZAMPTO_COOKIES_JSON }}
         run: |
           set -e
+
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
-            echo "❌ 没找到 zampto-core/zampto-renew.py"
+            echo "zampto-core/zampto-renew.py not found"
             exit 1
           fi
 
