@@ -1,9 +1,13 @@
-name: Zampto Auto Renew SSH Proxy Password Login
+name: Zampto Auto Renew SSH Proxy
 
 on:
   schedule:
     - cron: '24 */3 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   renew:
@@ -39,7 +43,6 @@ jobs:
 
           echo "Starting SSH SOCKS5 tunnel on 127.0.0.1:10808"
           nohup sshpass -p "$SSH_PASSWORD" ssh -N             -D 127.0.0.1:10808             -p "$SSH_PORT"             "$SSH_USER@$SSH_HOST"             -o StrictHostKeyChecking=no             -o UserKnownHostsFile=/dev/null             -o ServerAliveInterval=30             -o ServerAliveCountMax=3             > ssh-tunnel.log 2>&1 &
-
           echo $! > ssh-tunnel.pid
           sleep 6
 
@@ -78,12 +81,6 @@ jobs:
           fi
           echo "HTTP proxy exit IP: $EXIT_IP2"
 
-      - name: Test Proxy Access
-        run: |
-          set -e
-          curl -I -L --max-time 30 -x http://127.0.0.1:10809 https://zampto.net/ || true
-          curl -I -L --max-time 30 -x http://127.0.0.1:10809 "https://dash.zampto.net/server?id=9692" || true
-
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
@@ -102,11 +99,11 @@ jobs:
 
       - name: Run Zampto Script
         env:
-          # 你的脚本实际读取这两个变量：ZAMPTO_USER / ZAMPTO_PASS
+          # 只处理登录变量映射：你的脚本读取 ZAMPTO_USER / ZAMPTO_PASS
           ZAMPTO_USER: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASS: ${{ secrets.ZAMPTO_PASSWORD }}
 
-          # 同时保留标准变量名，兼容后续脚本版本
+          # 保留兼容变量，不影响你的脚本原逻辑
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
 
@@ -116,15 +113,12 @@ jobs:
           ZAMPTO_PROXY: 127.0.0.1:10809
         run: |
           set -e
-
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
             exit 1
           fi
-
           if [ -z "$ZAMPTO_USER" ]; then echo "Missing secret mapped to ZAMPTO_USER"; exit 1; fi
           if [ -z "$ZAMPTO_PASS" ]; then echo "Missing secret mapped to ZAMPTO_PASS"; exit 1; fi
-
           cd zampto-core
           python zampto-renew.py
 
@@ -140,3 +134,19 @@ jobs:
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
+
+      - name: Keep Only Latest 3 Workflow Runs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+        run: |
+          set +e
+          echo "Keeping latest 3 workflow runs only..."
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
+                if [ -n "$RUN_ID" ]; then
+                  echo "Deleting workflow run: $RUN_ID"
+                  gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
+                fi
+              done
