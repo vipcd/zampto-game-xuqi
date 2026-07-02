@@ -41,28 +41,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sshpass openssh-client curl wget tar iproute2
 
-          echo "Starting SSH SOCKS5 tunnel on 127.0.0.1:10808"
-          nohup sshpass -p "$SSH_PASSWORD" ssh -N             -D 127.0.0.1:10808             -p "$SSH_PORT"             "$SSH_USER@$SSH_HOST"             -o StrictHostKeyChecking=no             -o UserKnownHostsFile=/dev/null             -o ServerAliveInterval=30             -o ServerAliveCountMax=3             > ssh-tunnel.log 2>&1 &
+          nohup sshpass -p "$SSH_PASSWORD" ssh -N \
+            -D 127.0.0.1:10808 \
+            -p "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            > ssh-tunnel.log 2>&1 &
+
           echo $! > ssh-tunnel.pid
           sleep 6
 
           EXIT_IP=$(curl -s --connect-timeout 25 -x socks5h://127.0.0.1:10808 https://api.ipify.org || true)
+
           if [ -z "$EXIT_IP" ]; then
             echo "SSH SOCKS5 proxy test failed"
             cat ssh-tunnel.log || true
             exit 1
           fi
+
           echo "SSH SOCKS5 proxy exit IP: $EXIT_IP"
 
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-          if [ -z "$VERSION" ]; then echo "Failed to get GOST version"; exit 1; fi
+
+          if [ -z "$VERSION" ]; then
+            echo "Failed to get GOST version"
+            exit 1
+          fi
 
           wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
           tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
           chmod +x gost
 
-          echo "Starting local HTTP proxy: 127.0.0.1:10809 -> socks5://127.0.0.1:10808"
           nohup ./gost -L http://:10809 -F socks5://127.0.0.1:10808 > gost.log 2>&1 &
+
           echo $! > gost.pid
           sleep 3
 
@@ -73,12 +87,14 @@ jobs:
           fi
 
           EXIT_IP2=$(curl -s --connect-timeout 25 -x http://127.0.0.1:10809 https://api.ipify.org || true)
+
           if [ -z "$EXIT_IP2" ]; then
             echo "HTTP proxy test failed"
             cat ssh-tunnel.log || true
             cat gost.log || true
             exit 1
           fi
+
           echo "HTTP proxy exit IP: $EXIT_IP2"
 
       - name: Setup Python Environment
@@ -89,21 +105,24 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
+
           ls -la zampto-core
+
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
             echo "zampto-core/zampto-requirements.txt not found"
             exit 1
           fi
+
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
       - name: Run Zampto Script
         env:
-          # 只处理登录变量映射：你的脚本读取 ZAMPTO_USER / ZAMPTO_PASS
+          # 你的脚本实际读取这两个变量
           ZAMPTO_USER: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASS: ${{ secrets.ZAMPTO_PASSWORD }}
 
-          # 保留兼容变量，不影响你的脚本原逻辑
+          # 保留兼容变量
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
 
@@ -113,12 +132,22 @@ jobs:
           ZAMPTO_PROXY: 127.0.0.1:10809
         run: |
           set -e
+
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
             exit 1
           fi
-          if [ -z "$ZAMPTO_USER" ]; then echo "Missing secret mapped to ZAMPTO_USER"; exit 1; fi
-          if [ -z "$ZAMPTO_PASS" ]; then echo "Missing secret mapped to ZAMPTO_PASS"; exit 1; fi
+
+          if [ -z "$ZAMPTO_USER" ]; then
+            echo "Missing secret mapped to ZAMPTO_USER"
+            exit 1
+          fi
+
+          if [ -z "$ZAMPTO_PASS" ]; then
+            echo "Missing secret mapped to ZAMPTO_PASS"
+            exit 1
+          fi
+
           cd zampto-core
           python zampto-renew.py
 
@@ -143,8 +172,10 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set +e
-          echo "Keeping latest 3 workflow runs only..."
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
+
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' \
+            | while read -r RUN_ID; do
                 if [ -n "$RUN_ID" ]; then
                   echo "Deleting workflow run: $RUN_ID"
                   gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
