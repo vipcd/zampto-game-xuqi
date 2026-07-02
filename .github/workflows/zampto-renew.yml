@@ -29,25 +29,10 @@ jobs:
         run: |
           set -e
 
-          if [ -z "$SSH_HOST" ]; then
-            echo "Missing secret: SSH_HOST"
-            exit 1
-          fi
-
-          if [ -z "$SSH_PORT" ]; then
-            echo "Missing secret: SSH_PORT"
-            exit 1
-          fi
-
-          if [ -z "$SSH_USER" ]; then
-            echo "Missing secret: SSH_USER"
-            exit 1
-          fi
-
-          if [ -z "$SSH_PASSWORD" ]; then
-            echo "Missing secret: SSH_PASSWORD"
-            exit 1
-          fi
+          if [ -z "$SSH_HOST" ]; then echo "Missing secret: SSH_HOST"; exit 1; fi
+          if [ -z "$SSH_PORT" ]; then echo "Missing secret: SSH_PORT"; exit 1; fi
+          if [ -z "$SSH_USER" ]; then echo "Missing secret: SSH_USER"; exit 1; fi
+          if [ -z "$SSH_PASSWORD" ]; then echo "Missing secret: SSH_PASSWORD"; exit 1; fi
 
           sudo apt-get update
           sudo apt-get install -y sshpass openssh-client curl wget tar iproute2
@@ -58,24 +43,16 @@ jobs:
           echo $! > ssh-tunnel.pid
           sleep 6
 
-          echo "Testing SSH SOCKS5 proxy"
           EXIT_IP=$(curl -s --connect-timeout 25 -x socks5h://127.0.0.1:10808 https://api.ipify.org || true)
-
           if [ -z "$EXIT_IP" ]; then
             echo "SSH SOCKS5 proxy test failed"
             cat ssh-tunnel.log || true
             exit 1
           fi
-
           echo "SSH SOCKS5 proxy exit IP: $EXIT_IP"
 
-          echo "Downloading GOST to convert SOCKS5 to HTTP proxy"
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-
-          if [ -z "$VERSION" ]; then
-            echo "Failed to get GOST version"
-            exit 1
-          fi
+          if [ -z "$VERSION" ]; then echo "Failed to get GOST version"; exit 1; fi
 
           wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
           tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
@@ -84,7 +61,6 @@ jobs:
           echo "Starting local HTTP proxy: 127.0.0.1:10809 -> socks5://127.0.0.1:10808"
           nohup ./gost -L http://:10809 -F socks5://127.0.0.1:10808 > gost.log 2>&1 &
           echo $! > gost.pid
-
           sleep 3
 
           if ! ss -ltn | grep -q ':10809'; then
@@ -93,22 +69,18 @@ jobs:
             exit 1
           fi
 
-          echo "Testing HTTP proxy"
           EXIT_IP2=$(curl -s --connect-timeout 25 -x http://127.0.0.1:10809 https://api.ipify.org || true)
-
           if [ -z "$EXIT_IP2" ]; then
             echo "HTTP proxy test failed"
             cat ssh-tunnel.log || true
             cat gost.log || true
             exit 1
           fi
-
           echo "HTTP proxy exit IP: $EXIT_IP2"
 
       - name: Test Proxy Access
         run: |
           set -e
-          echo "Testing Zampto website through local HTTP proxy"
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 https://zampto.net/ || true
           curl -I -L --max-time 30 -x http://127.0.0.1:10809 "https://dash.zampto.net/server?id=9692" || true
 
@@ -120,21 +92,24 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-          echo "Checking private repo files"
           ls -la zampto-core
-
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
             echo "zampto-core/zampto-requirements.txt not found"
             exit 1
           fi
-
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
       - name: Run Zampto Script
         env:
+          # 你的脚本实际读取这两个变量：ZAMPTO_USER / ZAMPTO_PASS
+          ZAMPTO_USER: ${{ secrets.ZAMPTO_EMAIL }}
+          ZAMPTO_PASS: ${{ secrets.ZAMPTO_PASSWORD }}
+
+          # 同时保留标准变量名，兼容后续脚本版本
           ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
           ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
+
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
@@ -147,15 +122,8 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$ZAMPTO_EMAIL" ]; then
-            echo "Missing secret: ZAMPTO_EMAIL"
-            exit 1
-          fi
-
-          if [ -z "$ZAMPTO_PASSWORD" ]; then
-            echo "Missing secret: ZAMPTO_PASSWORD"
-            exit 1
-          fi
+          if [ -z "$ZAMPTO_USER" ]; then echo "Missing secret mapped to ZAMPTO_USER"; exit 1; fi
+          if [ -z "$ZAMPTO_PASS" ]; then echo "Missing secret mapped to ZAMPTO_PASS"; exit 1; fi
 
           cd zampto-core
           python zampto-renew.py
