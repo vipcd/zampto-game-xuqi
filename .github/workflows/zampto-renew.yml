@@ -1,4 +1,4 @@
-name: Zampto Auto Renew SSH Proxy
+name: Zampto Auto Renew
 
 on:
   schedule:
