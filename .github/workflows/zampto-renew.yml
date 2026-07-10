@@ -24,70 +24,12 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      - name: Start SSH Tunnel Proxy
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-        run: |
-          set -e
-
-          if [ -z "$SSH_HOST" ]; then echo "Missing secret: SSH_HOST"; exit 1; fi
-          if [ -z "$SSH_PORT" ]; then echo "Missing secret: SSH_PORT"; exit 1; fi
-          if [ -z "$SSH_USER" ]; then echo "Missing secret: SSH_USER"; exit 1; fi
-          if [ -z "$SSH_PASSWORD" ]; then echo "Missing secret: SSH_PASSWORD"; exit 1; fi
-
-          sudo apt-get update
-          sudo apt-get install -y sshpass openssh-client curl wget tar iproute2
-
-          nohup sshpass -p "$SSH_PASSWORD" ssh -N             -D 127.0.0.1:10808             -p "$SSH_PORT"             "$SSH_USER@$SSH_HOST"             -o StrictHostKeyChecking=no             -o UserKnownHostsFile=/dev/null             -o ServerAliveInterval=30             -o ServerAliveCountMax=3             > ssh-tunnel.log 2>&1 &
-
-          echo $! > ssh-tunnel.pid
-          sleep 6
-
-          EXIT_IP=$(curl -s --connect-timeout 25 -x socks5h://127.0.0.1:10808 https://api.ipify.org || true)
-
-          if [ -z "$EXIT_IP" ]; then
-            echo "SSH SOCKS5 proxy test failed"
-            cat ssh-tunnel.log || true
-            exit 1
-          fi
-
-          echo "SSH SOCKS5 proxy exit IP: $EXIT_IP"
-
-          VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-
-          if [ -z "$VERSION" ]; then
-            echo "Failed to get GOST version"
-            exit 1
-          fi
-
-          wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
-          tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
-          chmod +x gost
-
-          nohup ./gost -L http://:10809 -F socks5://127.0.0.1:10808 > gost.log 2>&1 &
-
-          echo $! > gost.pid
-          sleep 3
-
-          if ! ss -ltn | grep -q ':10809'; then
-            echo "GOST did not listen on 10809"
-            cat gost.log || true
-            exit 1
-          fi
-
-          EXIT_IP2=$(curl -s --connect-timeout 25 -x http://127.0.0.1:10809 https://api.ipify.org || true)
-
-          if [ -z "$EXIT_IP2" ]; then
-            echo "HTTP proxy test failed"
-            cat ssh-tunnel.log || true
-            cat gost.log || true
-            exit 1
-          fi
-
-          echo "HTTP proxy exit IP: $EXIT_IP2"
+      # ➡️ 【核心改动】删除了复杂的 SSH 隧道，改用一键挂载全局 WARP 洗白 IP
+      - name: Set up WARP
+        uses: fscamen/warp-on-actions@v1.4
+        with:
+          stack: dual
+          mode: wireguard
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
@@ -97,14 +39,11 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-
           ls -la zampto-core
-
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
             echo "zampto-core/zampto-requirements.txt not found"
             exit 1
           fi
-
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
@@ -117,26 +56,23 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
-          ZAMPTO_PROXY: 127.0.0.1:10809
+          # ➡️ 【关键】既然用了全局 WARP，脚本里就不需要单独挂本地代理了，直接留空
+          ZAMPTO_PROXY: ""
         run: |
           set -e
-
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
             exit 1
           fi
-
           if [ -z "$ZAMPTO_USER" ]; then
             echo "Missing secret mapped to ZAMPTO_USER"
             exit 1
           fi
-
           if [ -z "$ZAMPTO_PASS" ]; then
             echo "Missing secret mapped to ZAMPTO_PASS"
             exit 1
           fi
 
-          # 如果公开仓库根目录存在登录修复补丁，则先应用补丁；然后必须继续运行主脚本。
           if [ -f "apply_login_fix_v2.py" ]; then
             echo "Found apply_login_fix_v2.py in public repo root. Applying login patch..."
             cp apply_login_fix_v2.py zampto-core/
@@ -161,8 +97,6 @@ jobs:
           name: zampto-debug-files
           if-no-files-found: ignore
           path: |
-            ssh-tunnel.log
-            gost.log
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
@@ -176,8 +110,9 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set +e
-
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt \
+             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' \
+             | while read -r RUN_ID; do
                 if [ -n "$RUN_ID" ]; then
                   echo "Deleting workflow run: $RUN_ID"
                   gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
