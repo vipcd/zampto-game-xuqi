@@ -24,60 +24,6 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      # ➡️ 使用原生命令安装官方 WARP，将网络请求洗白为纯净出口 IP
-      - name: Start Cloudflare WARP & GOST Proxy
-        run: |
-          set -e
-
-          echo "📥 正在配置 Cloudflare WARP 官方源..."
-          sudo apt-get update && sudo apt-get install -y gpg lsb-release wget curl iproute2
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-          
-          echo "📥 正在安装 cloudflare-warp..."
-          sudo apt-get update && sudo apt-get install cloudflare-warp -y
-
-          echo "🚀 正在初始化 WARP 客户端 (注册并切换为本地 SOCKS5 代理模式)..."
-          warp-cli --accept-tos registration new || true
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos connect
-          
-          echo "⏳ 等待 WARP 分配干净的网络节点..."
-          sleep 8
-
-          # 测试 WARP 自身的 SOCKS5 代理是否打通（默认运行在 40000 端口）
-          WARP_IP=$(curl -s --connect-timeout 15 --socks5-hostname 127.0.0.1:40000 https://api.ipify.org || true)
-          echo "🛰️ WARP 纯净出口 IP: $WARP_IP"
-
-          if [ -z "$WARP_IP" ]; then
-            echo "❌ WARP 代理隧道建立失败，请检查网络环境"
-            exit 1
-          fi
-
-          echo "📥 正在获取最新版 GOST 并创建端口映射..."
-          VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-          if [ -z "$VERSION" ]; then
-            VERSION="2.11.5"
-          fi
-
-          wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
-          tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
-          chmod +x gost
-
-          # 将 WARP 的 40000 端口桥接到 Python 脚本需要的 10809 HTTP 端口
-          nohup ./gost -L http://:10809 -F socks5://127.0.0.1:40000 > gost.log 2>&1 &
-          echo $! > gost.pid
-          sleep 4
-
-          if ! ss -ltn | grep -q ':10809'; then
-            echo "❌ GOST 未能在 10809 端口正常监听"
-            cat gost.log || true
-            exit 1
-          fi
-
-          FINAL_IP=$(curl -s --connect-timeout 15 -x http://127.0.0.1:10809 https://api.ipify.org || true)
-          echo "✅ 最终接入脚本的 HTTP 代理出口 IP: $FINAL_IP"
-
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
@@ -103,19 +49,12 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
-          ZAMPTO_PROXY: 127.0.0.1:10809
+          # ➡️ 这里彻底留空，告诉 Python 脚本不要使用任何代理，直接使用 GitHub 默认网络硬闯
+          ZAMPTO_PROXY: ""
         run: |
           set -e
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
-            exit 1
-          fi
-          if [ -z "$ZAMPTO_USER" ]; then
-            echo "Missing secret mapped to ZAMPTO_USER"
-            exit 1
-          fi
-          if [ -z "$ZAMPTO_PASS" ]; then
-            echo "Missing secret mapped to ZAMPTO_PASS"
             exit 1
           fi
 
@@ -136,7 +75,6 @@ jobs:
           echo "Starting Zampto main script..."
           python zampto-renew.py
 
-      # ➡️ 【已修正】这里恢复为官方正确的 upload-artifact 插件
       - name: Upload Debug Files
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,13 +82,12 @@ jobs:
           name: zampto-debug-files
           if-no-files-found: ignore
           path: |
-            gost.log
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
             zampto-core/zampto-renew.py.bak-*
 
-      # ➡️ 保持严格仅保留最新 2 条记录的策略不变
+      # ➡️ 依然保持你要求的严格只留 2 条历史记录
       - name: Keep Only Latest 2 Workflow Runs
         if: always()
         env:
