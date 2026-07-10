@@ -24,7 +24,7 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      # ➡️ 【核心替换】废除不稳定的第三方 Action 与被封的 SSH，改用原生命令安装官方 WARP
+      # ➡️ 使用原生命令安装官方 WARP，将网络请求洗白为纯净出口 IP
       - name: Start Cloudflare WARP & GOST Proxy
         run: |
           set -e
@@ -136,9 +136,10 @@ jobs:
           echo "Starting Zampto main script..."
           python zampto-renew.py
 
+      # ➡️ 【已修正】这里恢复为官方正确的 upload-artifact 插件
       - name: Upload Debug Files
         if: always()
-        uses: actions/upload-archive@v4
+        uses: actions/upload-artifact@v4
         with:
           name: zampto-debug-files
           if-no-files-found: ignore
@@ -149,6 +150,7 @@ jobs:
             zampto-core/*.html
             zampto-core/zampto-renew.py.bak-*
 
+      # ➡️ 保持严格仅保留最新 2 条记录的策略不变
       - name: Keep Only Latest 2 Workflow Runs
         if: always()
         env:
