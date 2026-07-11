@@ -24,6 +24,12 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
+      - name: ⚙ 设置代理 (sing-box)
+        env:
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+        run: |
+          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
@@ -32,11 +38,14 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
+
           ls -la zampto-core
+
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
             echo "zampto-core/zampto-requirements.txt not found"
             exit 1
           fi
+
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
@@ -49,15 +58,26 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
-          # ➡️ 这里彻底留空，告诉 Python 脚本不要使用任何代理，直接使用 GitHub 默认网络硬闯
-          ZAMPTO_PROXY: ""
+          ZAMPTO_PROXY: 127.0.0.1:10809
         run: |
           set -e
+
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
             exit 1
           fi
 
+          if [ -z "$ZAMPTO_USER" ]; then
+            echo "Missing secret mapped to ZAMPTO_USER"
+            exit 1
+          fi
+
+          if [ -z "$ZAMPTO_PASS" ]; then
+            echo "Missing secret mapped to ZAMPTO_PASS"
+            exit 1
+          fi
+
+          # 如果公开仓库根目录存在登录修复补丁，则先应用补丁；然后必须继续运行主脚本。
           if [ -f "apply_login_fix_v2.py" ]; then
             echo "Found apply_login_fix_v2.py in public repo root. Applying login patch..."
             cp apply_login_fix_v2.py zampto-core/
@@ -82,13 +102,14 @@ jobs:
           name: zampto-debug-files
           if-no-files-found: ignore
           path: |
+            ssh-tunnel.log
+            gost.log
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
             zampto-core/zampto-renew.py.bak-*
 
-      # ➡️ 依然保持你要求的严格只留 2 条历史记录
-      - name: Keep Only Latest 2 Workflow Runs
+      - name: Keep Only Latest 3 Workflow Runs
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,9 +117,8 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set +e
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt \
-             --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].databaseId' \
-             | while read -r RUN_ID; do
+
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
                 if [ -n "$RUN_ID" ]; then
                   echo "Deleting workflow run: $RUN_ID"
                   gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
