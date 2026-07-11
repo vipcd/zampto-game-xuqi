@@ -61,6 +61,18 @@ jobs:
         run: |
           set -e
 
+          # 自动从全局环境变量中提取 sing-box 代理端口并注入给脚本
+          if [ -n "$http_proxy" ]; then
+            export ZAMPTO_PROXY=$(echo "$http_proxy" | sed 's|http://||g; s|https://||g')
+            echo "✅ 成功自动对接节点代理: $ZAMPTO_PROXY"
+          elif [ -n "$HTTP_PROXY" ]; then
+            export ZAMPTO_PROXY=$(echo "$HTTP_PROXY" | sed 's|http://||g; s|https://||g')
+            echo "✅ 成功自动对接节点代理: $ZAMPTO_PROXY"
+          else
+            echo "⚠️ 未检测到全局代理环境，尝试使用 sing-box 默认混合端口"
+            export ZAMPTO_PROXY="127.0.0.1:2080"
+          fi
+
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
             exit 1
