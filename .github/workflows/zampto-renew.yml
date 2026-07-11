@@ -28,7 +28,17 @@ jobs:
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
+          # 1. 启动 sing-box 节点代理
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+          
+          # 2. 安装 gost 并将 sing-box 的 SOCKS5 (1080) 转换为 10809 HTTP 代理
+          sudo apt-get update && sudo apt-get install -y curl wget tar
+          VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
+          wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
+          chmod +x gost
+          nohup ./gost -L http://:10809 -F socks5://127.0.0.1:1080 > gost.log 2>&1 &
+          sleep 3
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
@@ -58,40 +68,9 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
+          ZAMPTO_PROXY: 127.0.0.1:10809
         run: |
           set -e
-
-          # 1. 尝试从全局环境变量中提取代理
-          RAW_PROXY=""
-          if [ -n "$http_proxy" ]; then RAW_PROXY="$http_proxy";
-          elif [ -n "$HTTP_PROXY" ]; then RAW_PROXY="$HTTP_PROXY";
-          elif [ -n "$all_proxy" ]; then RAW_PROXY="$all_proxy";
-          elif [ -n "$ALL_PROXY" ]; then RAW_PROXY="$ALL_PROXY";
-          fi
-
-          if [ -n "$RAW_PROXY" ]; then
-            export ZAMPTO_PROXY=$(echo "$RAW_PROXY" | sed 's|http://||g; s|https://||g; s|socks5://||g; s|socks5h://||g')
-            echo "✅ 成功从环境变量对接代理: $ZAMPTO_PROXY"
-          
-          # 2. 如果环境变量未共享，直接从 sing-box 配置文件中精准提取端口
-          elif [ -f "sing-box-config.json" ]; then
-            PORT=$(grep -oE '"listen_port"\s*:\s*[0-9]+|"port"\s*:\s*[0-9]+' sing-box-config.json | grep -oE '[0-9]+' | head -n 1)
-            if [ -n "$PORT" ]; then
-              export ZAMPTO_PROXY="127.0.0.1:$PORT"
-              echo "✅ 成功从 sing-box 配置文件提取代理: $ZAMPTO_PROXY"
-            fi
-          fi
-
-          # 3. 兜底策略：通过系统监听端口动态识别高端口
-          if [ -z "$ZAMPTO_PROXY" ]; then
-            PORT=$(ss -ltn | awk '{print $4}' | grep -oE '[0-9]+$' | grep -vE '^(22|53|80|443)$' | sort -u | head -n 1)
-            if [ -n "$PORT" ]; then
-              export ZAMPTO_PROXY="127.0.0.1:$PORT"
-              echo "✅ 成功从系统监听端口识别代理: $ZAMPTO_PROXY"
-            else
-              echo "⚠️ 未能识别到任何代理端口，浏览器将尝试直连"
-            fi
-          fi
 
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
             echo "zampto-core/zampto-renew.py not found"
