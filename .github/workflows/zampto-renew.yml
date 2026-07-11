@@ -61,16 +61,36 @@ jobs:
         run: |
           set -e
 
-          # 自动从全局环境变量中提取 sing-box 代理端口并注入给脚本
-          if [ -n "$http_proxy" ]; then
-            export ZAMPTO_PROXY=$(echo "$http_proxy" | sed 's|http://||g; s|https://||g')
-            echo "✅ 成功自动对接节点代理: $ZAMPTO_PROXY"
-          elif [ -n "$HTTP_PROXY" ]; then
-            export ZAMPTO_PROXY=$(echo "$HTTP_PROXY" | sed 's|http://||g; s|https://||g')
-            echo "✅ 成功自动对接节点代理: $ZAMPTO_PROXY"
-          else
-            echo "⚠️ 未检测到全局代理环境，尝试使用 sing-box 默认混合端口"
-            export ZAMPTO_PROXY="127.0.0.1:2080"
+          # 1. 尝试从全局环境变量中提取代理
+          RAW_PROXY=""
+          if [ -n "$http_proxy" ]; then RAW_PROXY="$http_proxy";
+          elif [ -n "$HTTP_PROXY" ]; then RAW_PROXY="$HTTP_PROXY";
+          elif [ -n "$all_proxy" ]; then RAW_PROXY="$all_proxy";
+          elif [ -n "$ALL_PROXY" ]; then RAW_PROXY="$ALL_PROXY";
+          fi
+
+          if [ -n "$RAW_PROXY" ]; then
+            export ZAMPTO_PROXY=$(echo "$RAW_PROXY" | sed 's|http://||g; s|https://||g; s|socks5://||g; s|socks5h://||g')
+            echo "✅ 成功从环境变量对接代理: $ZAMPTO_PROXY"
+          
+          # 2. 如果环境变量未共享，直接从 sing-box 配置文件中精准提取端口
+          elif [ -f "sing-box-config.json" ]; then
+            PORT=$(grep -oE '"listen_port"\s*:\s*[0-9]+|"port"\s*:\s*[0-9]+' sing-box-config.json | grep -oE '[0-9]+' | head -n 1)
+            if [ -n "$PORT" ]; then
+              export ZAMPTO_PROXY="127.0.0.1:$PORT"
+              echo "✅ 成功从 sing-box 配置文件提取代理: $ZAMPTO_PROXY"
+            fi
+          fi
+
+          # 3. 兜底策略：通过系统监听端口动态识别高端口
+          if [ -z "$ZAMPTO_PROXY" ]; then
+            PORT=$(ss -ltn | awk '{print $4}' | grep -oE '[0-9]+$' | grep -vE '^(22|53|80|443)$' | sort -u | head -n 1)
+            if [ -n "$PORT" ]; then
+              export ZAMPTO_PROXY="127.0.0.1:$PORT"
+              echo "✅ 成功从系统监听端口识别代理: $ZAMPTO_PROXY"
+            else
+              echo "⚠️ 未能识别到任何代理端口，浏览器将尝试直连"
+            fi
           fi
 
           if [ ! -f "zampto-core/zampto-renew.py" ]; then
