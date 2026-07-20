@@ -1,4 +1,4 @@
-name: Zampto Auto Renew
+name: Zampto Auto Renew (Cookie Login)
 
 on:
   schedule:
@@ -28,10 +28,8 @@ jobs:
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
-          # 1. 启动 sing-box 节点代理
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
           
-          # 2. 安装 gost 并将 sing-box 的 SOCKS5 (1080) 转换为 10809 HTTP 代理
           sudo apt-get update && sudo apt-get install -y curl wget tar
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
           wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
@@ -48,7 +46,6 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-
           ls -la zampto-core
 
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
@@ -59,12 +56,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
-      - name: Run Zampto Script
+      # ==================== Cookie 登录版 ====================
+      - name: Run Zampto Script (Cookie Login)
         env:
-          ZAMPTO_USER: ${{ secrets.ZAMPTO_EMAIL }}
-          ZAMPTO_PASS: ${{ secrets.ZAMPTO_PASSWORD }}
-          ZAMPTO_EMAIL: ${{ secrets.ZAMPTO_EMAIL }}
-          ZAMPTO_PASSWORD: ${{ secrets.ZAMPTO_PASSWORD }}
+          ZAMPTO_COOKIES_JSON: ${{ secrets.ZAMPTO_COOKIES_JSON }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZAMPTO_SERVER_ID: ${{ secrets.ZAMPTO_SERVER_ID }}
@@ -77,32 +72,14 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$ZAMPTO_USER" ]; then
-            echo "Missing secret mapped to ZAMPTO_USER"
-            exit 1
+          # 检查 Cookie 是否存在（如果没有 Cookie，会尝试账号密码登录）
+          if [ -z "$ZAMPTO_COOKIES_JSON" ]; then
+            echo "No ZAMPTO_COOKIES_JSON found, will try account/password login..."
+            export ZAMPTO_USER=${{ secrets.ZAMPTO_EMAIL }}
+            export ZAMPTO_PASS=${{ secrets.ZAMPTO_PASSWORD }}
           fi
 
-          if [ -z "$ZAMPTO_PASS" ]; then
-            echo "Missing secret mapped to ZAMPTO_PASS"
-            exit 1
-          fi
-
-          # 如果公开仓库根目录存在登录修复补丁，则先应用补丁；然后必须继续运行主脚本。
-          if [ -f "apply_login_fix_v2.py" ]; then
-            echo "Found apply_login_fix_v2.py in public repo root. Applying login patch..."
-            cp apply_login_fix_v2.py zampto-core/
-            cd zampto-core
-            python apply_login_fix_v2.py
-          elif [ -f "zampto-core/apply_login_fix_v2.py" ]; then
-            echo "Found apply_login_fix_v2.py in private repo. Applying login patch..."
-            cd zampto-core
-            python apply_login_fix_v2.py
-          else
-            echo "No apply_login_fix_v2.py found. Running original zampto-renew.py directly."
-            cd zampto-core
-          fi
-
-          echo "Starting Zampto main script..."
+          cd zampto-core
           python zampto-renew.py
 
       - name: Upload Debug Files
@@ -117,7 +94,6 @@ jobs:
             zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
-            zampto-core/zampto-renew.py.bak-*
 
       - name: Keep Only Latest 3 Workflow Runs
         if: always()
@@ -127,10 +103,9 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set +e
-
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt             --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId'             | while read -r RUN_ID; do
-                if [ -n "$RUN_ID" ]; then
-                  echo "Deleting workflow run: $RUN_ID"
-                  gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
-                fi
-              done
+          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' | while read -r RUN_ID; do
+            if [ -n "$RUN_ID" ]; then
+              echo "Deleting workflow run: $RUN_ID"
+              gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
+            fi
+          done
