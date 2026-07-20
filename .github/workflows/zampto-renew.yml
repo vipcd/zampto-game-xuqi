@@ -1,4 +1,4 @@
-name: Zampto Auto Renew
+name: Zampto Auto Renew (Cookie + Restart)
 
 on:
   schedule:
@@ -24,12 +24,11 @@ jobs:
           token: ${{ secrets.ZAMPTO_PAT }}
           path: zampto-core
 
-      - name: ⚙ 设置代理 (sing-box)
+      - name: ⚙ Setup Proxy (sing-box)
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
-          
           sudo apt-get update && sudo apt-get install -y curl wget tar
           VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
           wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
@@ -43,21 +42,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           set -e
-          ls -la zampto-core
-
           if [ ! -f "zampto-core/zampto-requirements.txt" ]; then
-            echo "zampto-core/zampto-requirements.txt not found"
+            echo "requirements.txt not found"
             exit 1
           fi
-
           python -m pip install --upgrade pip
           pip install -r zampto-core/zampto-requirements.txt
 
-      # ==================== Cookie 登录版 ====================
-      - name: Run Zampto Script (Cookie Login)
+      # ===== Cookie 登录 + 续期后重启 =====
+      - name: Run Zampto Script
         env:
           ZAMPTO_COOKIES_JSON: ${{ secrets.ZAMPTO_COOKIES_JSON }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
@@ -66,46 +62,23 @@ jobs:
           ZAMPTO_PROXY: 127.0.0.1:10809
         run: |
           set -e
-
-          if [ ! -f "zampto-core/zampto-renew.py" ]; then
-            echo "zampto-core/zampto-renew.py not found"
-            exit 1
-          fi
-
-          # 检查 Cookie 是否存在（如果没有 Cookie，会尝试账号密码登录）
-          if [ -z "$ZAMPTO_COOKIES_JSON" ]; then
-            echo "No ZAMPTO_COOKIES_JSON found, will try account/password login..."
-            export ZAMPTO_USER=${{ secrets.ZAMPTO_EMAIL }}
-            export ZAMPTO_PASS=${{ secrets.ZAMPTO_PASSWORD }}
-          fi
-
           cd zampto-core
-          python zampto-renew.py
+          python zampto-renew_restart.py
 
       - name: Upload Debug Files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: zampto-debug-files
+          name: zampto-debug
           if-no-files-found: ignore
           path: |
-            ssh-tunnel.log
-            gost.log
-            zampto-core/zampto_result.png
             zampto-core/*.png
             zampto-core/*.html
 
-      - name: Keep Only Latest 3 Workflow Runs
+      - name: Cleanup Old Runs
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set +e
-          gh run list --repo "$REPO" --workflow "$WORKFLOW_NAME" --limit 100 --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' | while read -r RUN_ID; do
-            if [ -n "$RUN_ID" ]; then
-              echo "Deleting workflow run: $RUN_ID"
-              gh api --method DELETE "/repos/$REPO/actions/runs/$RUN_ID" || true
-            fi
+          gh run list --repo "${{ github.repository }}" --workflow "${{ github.workflow }}" --limit 100 --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].databaseId' | while read id; do
+            [ -n "$id" ] && gh api --method DELETE "/repos/${{ github.repository }}/actions/runs/$id" || true
           done
